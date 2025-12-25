@@ -438,7 +438,6 @@
       font-weight: 500;
       font-size: 14px;
       transition: background 0.2s;
-      text-decoration: none;
     }
 
     .download-button:hover {
@@ -523,6 +522,11 @@
       display: none;
     }
 
+    .resolution-option input[type="radio"]:checked + label {
+      color: var(--color-primary);
+      font-weight: 600;
+    }
+
     .resolution-option.selected {
       border-color: var(--color-primary);
       background: rgba(50, 184, 198, 0.1);
@@ -533,7 +537,6 @@
       cursor: pointer;
       margin: 0;
       font-weight: 500;
-      color: var(--color-text);
     }
 
     .resolution-option .resolution-desc {
@@ -597,7 +600,7 @@
           <label>Разрешение видео</label>
           <div class="resolution-grid">
             <div class="resolution-option selected" data-resolution="low">
-              <input type="radio" id="res-low" name="resolution" value="low" checked />
+              <input type="radio" id="res-low" name="resolution" value="low" />
               <label for="res-low">🐢 Low</label>
               <span class="resolution-desc">640×480</span>
             </div>
@@ -905,9 +908,7 @@
     fileSelector.addEventListener("click", () => fileInput.click());
 
     fileInput.addEventListener("change", (e) => {
-      if (e.target.files && e.target.files.length > 0) {
-        handleFileSelect(e.target.files[0]);
-      }
+      handleFileSelect(e.target.files[0]);
     });
 
     // Drag & Drop
@@ -924,7 +925,7 @@
       e.preventDefault();
       fileSelector.classList.remove("dragover");
       const files = e.dataTransfer.files;
-      if (files && files.length > 0) {
+      if (files.length > 0) {
         handleFileSelect(files[0]);
       }
     });
@@ -982,11 +983,6 @@
         URL.revokeObjectURL(url);
         updatePreview();
       };
-
-      video.onerror = () => {
-        showStatus("Ошибка загрузки видео", "error");
-        URL.revokeObjectURL(url);
-      };
     }
 
     // Обновление предпросмотра ASCII
@@ -1000,6 +996,7 @@
         const canvas = previewFrame;
         const ctx = canvas.getContext("2d");
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
 
         const width = parseInt(widthInput.value);
         const DEFAULT_CHAR_ASPECT_RATIO = 0.5;
@@ -1128,14 +1125,8 @@
         });
 
         if (!response.ok) {
-          let errorMessage = "Неизвестная ошибка";
-          try {
-            const errorData = await response.json();
-            errorMessage = errorData.detail || errorData.message || errorMessage;
-          } catch (e) {
-            errorMessage = `HTTP ${response.status}`;
-          }
-          showStatus(`Ошибка: ${errorMessage}`, "error");
+          const errorData = await response.json();
+          showStatus(`Ошибка: ${errorData.detail || "Неизвестная ошибка"}`, "error");
           progressBar.classList.remove("show");
           convertBtn.disabled = false;
           convertBtn.innerHTML = "<span class='emoji'>🚀</span>Конвертировать";
@@ -1164,6 +1155,7 @@
     function displayResults(data) {
       console.log("Полные данные ответа:", data);
       console.log("data.result:", data.result);
+      console.log("mp4_file:", data.result.mp4_file);
       
       resultsContainer.style.display = "block";
       resultsContainer.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -1188,10 +1180,10 @@
 
       let resultHtml = "";
 
-      // Проверяем mp4_file
-      const hasMP4 = data.result && (data.result.mp4_file || data.result.mp4_url);
-      
-      if (hasMP4) {
+      // Логируем условие
+      console.log("mp4_file exists?", !!data.result.mp4_file);
+
+      if (data.result.mp4_file) {
         resultHtml += `
           <div class="result-card">
             <h3><span class="emoji">🎥</span>Видео MP4</h3>
@@ -1205,7 +1197,7 @@
                 <span class="info-value">Вычисляется...</span>
               </div>
             </div>
-            <a href="${API_URL}/download/${data.job_id}/video" class="download-button" download>
+            <a href="${API_URL}/download/${data.job_id}/video" class="download-button">
               <span class="emoji">⬇️</span>Скачать MP4
             </a>
           </div>
@@ -1239,16 +1231,7 @@
       document.getElementById("resultSection").innerHTML = resultHtml;
     }
 
-    clearBtn.addEventListener("click", () => {
-      currentFile = null;
-      previewFrame = null;
-      fileInput.value = "";
-      fileInfo.classList.remove("show");
-      asciiPreview.innerHTML = '<div style="text-align: center; padding: 20px; color: #888;">Загрузи видео чтобы увидеть предпросмотр</div>';
-      resultsContainer.style.display = "none";
-      statusMessage.classList.remove("show");
-      progressBar.classList.remove("show");
-    });
+
   </script>
 </body>
 </html>

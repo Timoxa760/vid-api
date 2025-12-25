@@ -8,23 +8,29 @@ import logging
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
 import subprocess
-import os
 from PIL import Image, ImageDraw, ImageFont
 
 from vid_core.constants import (
-    ASCII_SETS, DEFAULT_CHAR_ASPECT_RATIO, FRAME_FILENAME_TEMPLATE,
-    VIDEO_FILENAME, FRAME_PNG_EXT, FRAME_TXT_EXT, VIDEO_MP4_EXT
+    ASCII_SETS,
+    DEFAULT_CHAR_ASPECT_RATIO,
+    FRAME_FILENAME_TEMPLATE,
+    VIDEO_FILENAME,
+    FRAME_PNG_EXT,
+    FRAME_TXT_EXT,
+    VIDEO_MP4_EXT,
 )
-
 from vid_core.utils import (
-    hex_to_rgb, hex_to_bgr, ensure_dir, get_frame_filename,
-    get_video_filename, format_seconds
+    hex_to_rgb,
+    ensure_dir,
+    get_frame_filename,
+    get_video_filename,
 )
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class ConvertConfig:
@@ -43,18 +49,18 @@ class ConvertConfig:
     save_txt: bool = False
     save_png: bool = True
     save_mp4: bool = True
-    resolution: str = "high"  # "low", "medium", "high", "4k"
+    resolution: str = "high"  # low / medium / high / 4k
 
 
 class ASCIIConverter:
     """Основной класс для конвертации видео в ASCII"""
 
-    # Разрешения для разных режимов
+    # Целевые выходные разрешения PNG/MP4
     RESOLUTIONS = {
         "low": (640, 480),
-        "medium": (1280, 960),
-        "high": (1920, 1440),
-        "4k": (3840, 2880),
+        "medium": (1280, 720),
+        "high": (1920, 1080),
+        "4k": (3840, 2160),
     }
 
     def __init__(self, output_dir: str, config: ConvertConfig):
@@ -70,17 +76,22 @@ class ASCIIConverter:
         self.ascii_set = ASCII_SETS.get(config.style, ASCII_SETS["normal"])
         self.bg_color_rgb = hex_to_rgb(config.bg_color)
         self.text_color_rgb = hex_to_rgb(config.text_color)
+
+        # Высота в символах (как и раньше)
         self.height = int(config.width * DEFAULT_CHAR_ASPECT_RATIO)
-        
-        # Получить разрешение
+
+        # Целевое пиксельное разрешение выходного кадра/видео
         if config.resolution not in self.RESOLUTIONS:
             logger.warning(f"Неизвестное разрешение {config.resolution}, используется 'high'")
-            self.fixed_width, self.fixed_height = self.RESOLUTIONS["high"]
+            self.out_width, self.out_height = self.RESOLUTIONS["high"]
         else:
-            self.fixed_width, self.fixed_height = self.RESOLUTIONS[config.resolution]
-        
+            self.out_width, self.out_height = self.RESOLUTIONS[config.resolution]
+
         ensure_dir(str(self.output_dir))
-        logger.info(f"Инициализирован конвертер с шириной {config.width}, разрешением {config.resolution} ({self.fixed_width}x{self.fixed_height})")
+        logger.info(
+            f"Инициализирован конвертер: width={config.width} chars, "
+            f"resolution={config.resolution} ({self.out_width}x{self.out_height})"
+        )
 
     def calculate_height(self, width: int) -> int:
         """Вычислить высоту на основе ширины"""
@@ -109,10 +120,7 @@ class ASCIIConverter:
 
     def apply_color_corrections(self, frame: np.ndarray) -> np.ndarray:
         """Применить все коррекции цвета"""
-        # Преобразовать в Grayscale для обработки яркости
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        # Применить коррекции в порядке: яркость -> контраст -> гамма
         gray = self.brightness_correction(gray)
         gray = self.contrast_correction(gray)
         gray = self.gamma_correction(gray)
@@ -128,31 +136,19 @@ class ASCIIConverter:
         Returns:
             ASCII текст кадра
         """
-        # Сначала масштабируем до фиксированного разрешения
-        frame_fixed = cv2.resize(frame, (self.fixed_width, self.fixed_height))
+        gray = self.apply_color_corrections(frame)
 
-        # Применить коррекции
-        gray = self.apply_color_corrections(frame_fixed)
-
-        # Потом масштабируем для ASCII (меньший размер)
-        ascii_width = self.config.width
-        ascii_height = self.height
-        resized = cv2.resize(gray, (ascii_width, ascii_height))
-
-        # Нормализировать значения в диапазон 0-1
+        resized = cv2.resize(gray, (self.config.width, self.height))
         normalized = resized.astype(np.float32) / 255.0
 
-        # Преобразовать в ASCII
         lines = []
         for row in normalized:
             line_chars = []
             for pixel in row:
-                # Найти индекс в ASCII наборе
                 idx = int(pixel * (len(self.ascii_set) - 1))
                 line_chars.append(self.ascii_set[idx])
             lines.append("".join(line_chars))
 
-        # Объединить строки БЕЗ лишнего \n в конце
         ascii_text = "\n".join(lines)
         return ascii_text
 
@@ -165,66 +161,86 @@ class ASCIIConverter:
             filepath.write_text(ascii_text)
             logger.debug(f"Сохранён текстовый кадр: {filepath}")
             return filepath
-
         except Exception as e:
             logger.error(f"Ошибка при сохранении текстового кадра: {str(e)}")
             raise
 
     def render_frame_png(self, ascii_text: str, frame_number: int) -> Path:
-        """Отрендерить ASCII кадр в PNG изображение с помощью PIL"""
+        """
+        Отрендерить ASCII кадр в PNG с адаптацией размера символа под целевое разрешение.
+        """
         try:
-            # Параметры шрифта
-            font_size = 10
+            lines = ascii_text.split("\n")
+            num_lines = max(len(lines), 1)
 
-            # Попытаться загрузить моноширинный шрифт
-            font = None
-            for font_name in ["DejaVuSansMono.ttf", "Courier New.ttf", "consola.ttf"]:
-                try:
-                    font = ImageFont.truetype(font_name, font_size)
-                    logger.debug(f"Загружен шрифт: {font_name}")
-                    break
-                except:
-                    continue
+            # Целевое пиксельное разрешение выхода
+            img_width = self.out_width
+            img_height = self.out_height
 
-            if font is None:
-                font = ImageFont.load_default()
-                logger.warning("Используется стандартный шрифт (не найдены моноширинные)")
+            # Количество столбцов/строк в символах
+            target_cols = max(self.config.width, 1)
+            target_rows = num_lines
 
-            # Вычисление размеров изображения
-            lines = ascii_text.split('\n')
+            base_font_size = 40  # верхняя граница, дальше будем уменьшать
 
-            # Измерить реальные размеры текста
-            # Используй самую длинную строку для расчёта ширины
-            test_line = "X" * self.config.width
-            bbox = font.getbbox(test_line)
-            char_width = (bbox[2] - bbox[0]) / self.config.width
-            char_height = bbox[3] - bbox[1] + 2  # +2 для отступа между строками
+            def pick_font_size():
+                # Идём от большего к меньшему, чтобы максимально заполнить кадр
+                for size in range(base_font_size, 4, -1):
+                    font_local = None
+                    for font_name in ["DejaVuSansMono.ttf", "Courier New.ttf", "consola.ttf"]:
+                        try:
+                            font_local = ImageFont.truetype(font_name, size)
+                            break
+                        except Exception:
+                            continue
+                    if font_local is None:
+                        font_local = ImageFont.load_default()
 
-            img_width = int(self.config.width * char_width)
-            img_height = int(len(lines) * char_height)
+                    # Оценим размер одного символа
+                    bbox = font_local.getbbox("X")
+                    char_w = bbox[2] - bbox[0]
+                    char_h = bbox[3] - bbox[1]
 
-            # Убедиться, что высота чётная для h264
-            if img_height % 2 != 0:
-                img_height += 1
+                    text_w = char_w * target_cols
+                    text_h = char_h * target_rows
 
-            # Создать изображение
+                    # Влезает ли в 90% кадра по обеим осям
+                    if text_w <= img_width * 0.9 and text_h <= img_height * 0.9:
+                        return font_local, char_w, char_h
+
+                # Если ничего не подошло, fallback
+                font_fallback = ImageFont.load_default()
+                bbox = font_fallback.getbbox("X")
+                return font_fallback, (bbox[2] - bbox[0]), (bbox[3] - bbox[1])
+
+            font, char_w, char_h = pick_font_size()
+
+            text_width_px = char_w * target_cols
+            text_height_px = char_h * target_rows
+
+            # Центрируем текст в кадре
+            x_offset = int((img_width - text_width_px) / 2)
+            y_offset = int((img_height - text_height_px) / 2)
+
             bg_color_rgb = tuple(self.bg_color_rgb)
             text_color_rgb = tuple(self.text_color_rgb)
-            img = Image.new('RGB', (img_width, img_height), bg_color_rgb)
+            img = Image.new("RGB", (img_width, img_height), bg_color_rgb)
             draw = ImageDraw.Draw(img)
 
-            # Нарисовать текст построчно
-            y = 0
-            for line in lines:
-                # Убедиться, что строка имеет правильную длину (padding пробелами)
-                padded_line = line.ljust(self.config.width)
-                draw.text((0, y), padded_line, fill=text_color_rgb, font=font)
-                y += int(char_height)
+            for row_idx, line in enumerate(lines):
+                padded_line = line.ljust(target_cols)
+                y = y_offset + row_idx * char_h
+                for col_idx, ch in enumerate(padded_line):
+                    x = x_offset + col_idx * char_w
+                    draw.text((x, y), ch, fill=text_color_rgb, font=font)
 
-            # Сохранить PNG
+            # Высота должна быть чётной для h264
+            if img_height % 2 != 0:
+                img = img.resize((img_width, img_height + 1), Image.NEAREST)
+
             filename = get_frame_filename(frame_number, FRAME_PNG_EXT)
             filepath = self.output_dir / filename
-            img.save(str(filepath), 'PNG')
+            img.save(str(filepath), "PNG")
             logger.debug(f"Сохранён PNG кадр: {filepath}")
             return filepath
 
@@ -249,19 +265,16 @@ class ASCIIConverter:
         """
         logger.info(f"Начало конвертации видео: {video_path}")
 
-        # Открыть видео
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise ValueError(f"Не удалось открыть видео: {video_path}")
 
-        # Получить информацию о видео
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        src_fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        logger.info(f"Видео: {total_frames} кадров, {fps} FPS, {width}x{height}")
+        logger.info(f"Видео: {total_frames} кадров, {src_fps} FPS, {width}x{height}")
 
-        # Списки для результатов
         txt_files = []
         png_files = []
         frame_number = 0
@@ -272,10 +285,8 @@ class ASCIIConverter:
                 if not ret:
                     break
 
-                # Преобразовать в ASCII
                 ascii_text = self.frame_to_ascii(frame)
 
-                # Сохранить результаты
                 if self.config.save_txt:
                     txt_file = self.save_frame_txt(ascii_text, frame_number)
                     txt_files.append(txt_file)
@@ -286,18 +297,15 @@ class ASCIIConverter:
 
                 frame_number += 1
 
-                # Отчёт о прогрессе
                 if progress_callback:
-                    progress = (frame_number / total_frames) * 100
+                    progress = frame_number / max(total_frames, 1)
                     progress_callback(progress, frame_number, total_frames)
-
         finally:
             cap.release()
 
-        # Создать видео из PNG файлов если нужно
         mp4_file = None
         if self.config.save_mp4 and png_files:
-            mp4_file = self.create_video_from_pngs(fps)
+            mp4_file = self.create_video_from_pngs(self.config.fps or src_fps)
             logger.info(f"MP4 файл создан: {mp4_file}")
 
         logger.info(f"Конвертация завершена: {frame_number} кадров обработано")
@@ -311,9 +319,8 @@ class ASCIIConverter:
             "png_files_count": len(png_files),
             "txt_files_count": len(txt_files),
         }
-        
-        logger.info(f"Результат конвертации: {result}")
 
+        logger.info(f"Результат конвертации: {result}")
         return result
 
     def create_video_from_pngs(self, fps: int) -> Optional[Path]:
@@ -321,17 +328,16 @@ class ASCIIConverter:
         try:
             output_file = self.output_dir / get_video_filename(VIDEO_MP4_EXT)
 
-            # FFmpeg команда - правильный формат для FFmpeg: %06d
             input_pattern = str(self.output_dir / "frame_%06d.png")
             cmd = [
                 "ffmpeg",
-                "-y",  # Перезаписать файл если существует
-                "-framerate", str(self.config.fps),
+                "-y",
+                "-framerate", str(fps),
                 "-i", input_pattern,
-                "-vf", "format=yuv420p",  # Убедиться, что формат совместим с плеерами
+                "-vf", "format=yuv420p",
                 "-crf", str(self.config.crf),
                 "-preset", "medium",
-                str(output_file)
+                str(output_file),
             ]
 
             logger.info(f"Создание видео: {output_file}")

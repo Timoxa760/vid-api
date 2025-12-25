@@ -1,7 +1,5 @@
 """
-
 API роуты для конвертации видео в ASCII
-
 """
 
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, BackgroundTasks
@@ -12,6 +10,8 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 import asyncio
+import io
+import zipfile
 
 from app.config import get_settings
 from app.models import ConvertRequest, ConvertResponse, JobStatus
@@ -27,9 +27,11 @@ settings = get_settings()
 # In-memory хранилище статусов задач (в production использовать Redis)
 JOBS_STATUS = {}
 
+
 def create_job_id() -> str:
     """Создать уникальный ID задачи"""
     return str(uuid.uuid4())[:8]
+
 
 @router.post("/convert/video", response_model=ConvertResponse)
 async def convert_video(
@@ -90,14 +92,14 @@ async def convert_video(
         if file_size_mb > settings.MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=413,
-                detail=f"Файл слишком большой: {file_size_mb:.1f}MB > {settings.MAX_FILE_SIZE}MB"
+                detail=f"Файл слишком большой: {file_size_mb:.1f}MB > {settings.MAX_FILE_SIZE}MB",
             )
 
         # Создать временный файл
         temp_dir = Path(tempfile.gettempdir()) / f"vid_api_{job_id}"
         ensure_dir(str(temp_dir))
         input_path = temp_dir / sanitize_filename(file.filename)
-        with open(input_path, 'wb') as f:
+        with open(input_path, "wb") as f:
             f.write(content)
         logger.info(f"Файл загружен: {input_path} ({file_size_mb:.1f}MB)")
 
@@ -143,12 +145,11 @@ async def convert_video(
         JOBS_STATUS[job_id]["status"] = "completed"
         JOBS_STATUS[job_id]["progress"] = 1.0
         JOBS_STATUS[job_id]["message"] = "Готово"
-        
-        # ✅ ИСПРАВЛЕНО: проверяем "mp4_file" вместо "mp4_path"
+
         JOBS_STATUS[job_id]["result"] = {
             "frames_count": result["frames_count"],
             "fps": result["fps"],
-            "mp4_file": result.get("mp4_file"),  # Это ключ из converter.py
+            "mp4_file": result.get("mp4_file"),
             "txt_files_count": result.get("txt_files_count", 0),
             "png_files_count": result.get("png_files_count", 0),
         }
@@ -176,8 +177,9 @@ async def convert_video(
         JOBS_STATUS[job_id]["error"] = str(e)
         raise HTTPException(
             status_code=500,
-            detail=f"Ошибка конвертации: {str(e)}"
+            detail=f"Ошибка конвертации: {str(e)}",
         )
+
 
 @router.get("/status/{job_id}", response_model=JobStatus)
 async def get_job_status(job_id: str):
@@ -185,7 +187,7 @@ async def get_job_status(job_id: str):
     if job_id not in JOBS_STATUS:
         raise HTTPException(
             status_code=404,
-            detail=f"Задача {job_id} не найдена"
+            detail=f"Задача {job_id} не найдена",
         )
 
     job = JOBS_STATUS[job_id]
@@ -200,6 +202,7 @@ async def get_job_status(job_id: str):
         error=job.get("error"),
     )
 
+
 @router.get("/download/{job_id}/video")
 async def download_video(job_id: str):
     """Скачать MP4 видео"""
@@ -209,7 +212,7 @@ async def download_video(job_id: str):
     if JOBS_STATUS[job_id]["status"] != "completed":
         raise HTTPException(
             status_code=400,
-            detail=f"Задача еще не завершена: {JOBS_STATUS[job_id]['status']}"
+            detail=f"Задача еще не завершена: {JOBS_STATUS[job_id]['status']}",
         )
 
     output_dir = Path(settings.RESULTS_DIR) / job_id
@@ -219,10 +222,37 @@ async def download_video(job_id: str):
         raise HTTPException(status_code=404, detail="MP4 видео не найдено")
 
     return FileResponse(
-        path=video_path,
+        path=str(video_path),
         media_type="video/mp4",
-        filename=f"ascii_video_{job_id}.mp4"
+        filename=f"ascii_video_{job_id}.mp4",
     )
+
+
+@router.get("/download/{job_id}/frame/{index}")
+async def download_frame(job_id: str, index: int = 0):
+    """
+    Скачать отдельный PNG‑кадр по индексу.
+
+    GET /api/v1/download/<job_id>/frame/0 -> frame_000000.png
+    """
+    if job_id not in JOBS_STATUS:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
+    if index < 0:
+        raise HTTPException(status_code=400, detail="index must be >= 0")
+
+    output_dir = Path(settings.RESULTS_DIR) / job_id
+    frame_path = output_dir / f"frame_{index:06d}.png"
+
+    if not frame_path.exists():
+        raise HTTPException(status_code=404, detail="Кадр не найден")
+
+    return FileResponse(
+        path=str(frame_path),
+        media_type="image/png",
+        filename=f"ascii_frame_{job_id}_{index:06d}.png",
+    )
+
 
 @router.get("/download/{job_id}/frames")
 async def download_frames(job_id: str, format: str = "png"):
@@ -230,41 +260,36 @@ async def download_frames(job_id: str, format: str = "png"):
     if job_id not in JOBS_STATUS:
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
-    import zipfile
-    import io
-
     output_dir = Path(settings.RESULTS_DIR) / job_id
 
-    # Найти кадры нужного формата
     if format == "png":
         frame_files = sorted(output_dir.glob("frame_*.png"))
-        ext = ".png"
     elif format == "txt":
         frame_files = sorted(output_dir.glob("frame_*.txt"))
-        ext = ".txt"
     else:
         raise HTTPException(status_code=400, detail="Неподдерживаемый формат")
 
     if not frame_files:
         raise HTTPException(status_code=404, detail=f"Кадры формата {format} не найдены")
 
-    # Создать ZIP в памяти
     zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for frame_file in frame_files:
             zf.write(frame_file, arcname=frame_file.name)
 
     zip_buffer.seek(0)
 
     return FileResponse(
-        iter([zip_buffer.getvalue()]),
+        path=zip_buffer,
         media_type="application/zip",
-        filename=f"ascii_frames_{job_id}_{format}.zip"
+        filename=f"ascii_frames_{job_id}_{format}.zip",
     )
+
 
 async def cleanup_temp(temp_dir: str):
     """Очистить временную директорию"""
     import shutil
+
     try:
         shutil.rmtree(temp_dir)
         logger.debug(f"Очищена временная директория: {temp_dir}")
