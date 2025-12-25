@@ -1,0 +1,23 @@
+# Development зависимости
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+httpx==0.25.2
+
+# Форматирование и линтинг
+black==23.12.0
+flake8==6.1.0
+isort==5.13.2
+pylint==3.0.3
+
+# Type checking
+mypy==1.7.1
+types-requests==2.31.0.10
+
+# Документация
+sphinx==7.2.6
+sphinx-rtd-theme==2.0.0
+
+# Разработка
+ipython==8.18.1
+ipdb==0.13.13
