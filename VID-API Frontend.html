@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>VID-API — Конвертер видео в ASCII</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
   <style>
     :root {
       --color-primary: #32b8c6;
@@ -240,16 +241,21 @@
     }
 
     #asciiPreview {
-      font-family: "Monaco", "Courier New", monospace;
-      font-size: 9px;
-      color: #00ff00;
-      line-height: 1;
-      white-space: pre;
-      overflow-y: auto;
-      flex: 1;
-      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       padding: 8px;
       border-radius: 4px;
+      background: #000;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    #asciiPreview canvas {
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      background: inherit;
+      font-family: "IBM Plex Mono", "Courier New", monospace;
     }
 
     .status-message {
@@ -432,6 +438,7 @@
       font-weight: 500;
       font-size: 14px;
       transition: background 0.2s;
+      text-decoration: none;
     }
 
     .download-button:hover {
@@ -491,6 +498,51 @@
       margin-right: 4px;
     }
 
+    .resolution-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .resolution-option {
+      padding: 12px;
+      border: 2px solid var(--color-border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+      background: white;
+    }
+
+    .resolution-option:hover {
+      border-color: var(--color-primary);
+      background: rgba(50, 184, 198, 0.05);
+    }
+
+    .resolution-option input[type="radio"] {
+      display: none;
+    }
+
+    .resolution-option.selected {
+      border-color: var(--color-primary);
+      background: rgba(50, 184, 198, 0.1);
+    }
+
+    .resolution-option label {
+      display: block;
+      cursor: pointer;
+      margin: 0;
+      font-weight: 500;
+      color: var(--color-text);
+    }
+
+    .resolution-option .resolution-desc {
+      display: block;
+      font-size: 12px;
+      color: var(--color-text-secondary);
+      margin-top: 4px;
+    }
+
     footer {
       text-align: center;
       margin-top: 60px;
@@ -540,6 +592,33 @@
           </div>
         </div>
 
+        <!-- Разрешение -->
+        <div class="form-group">
+          <label>Разрешение видео</label>
+          <div class="resolution-grid">
+            <div class="resolution-option selected" data-resolution="low">
+              <input type="radio" id="res-low" name="resolution" value="low" checked />
+              <label for="res-low">🐢 Low</label>
+              <span class="resolution-desc">640×480</span>
+            </div>
+            <div class="resolution-option" data-resolution="medium">
+              <input type="radio" id="res-medium" name="resolution" value="medium" />
+              <label for="res-medium">⚡ Medium</label>
+              <span class="resolution-desc">1280×960</span>
+            </div>
+            <div class="resolution-option" data-resolution="high">
+              <input type="radio" id="res-high" name="resolution" value="high" />
+              <label for="res-high">🎬 High</label>
+              <span class="resolution-desc">1920×1440</span>
+            </div>
+            <div class="resolution-option" data-resolution="4k">
+              <input type="radio" id="res-4k" name="resolution" value="4k" />
+              <label for="res-4k">🔥 4K</label>
+              <span class="resolution-desc">3840×2880</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Ширина ASCII -->
         <div class="form-group">
           <label for="widthInput">Ширина (символов)</label>
@@ -565,6 +644,7 @@
             <option value="dots">🔘 Dots (точки)</option>
             <option value="gradient">🌈 Gradient (градиент)</option>
             <option value="blocks">⬛ Blocks (блоки)</option>
+            <option value="thin">📝 Thin (тонкие)</option>
           </select>
         </div>
 
@@ -760,6 +840,7 @@
     let currentFile = null;
     let previewFrame = null;
     let currentJobId = null;
+    let selectedResolution = "low";
 
     // Обновление отображения значений
     widthInput.addEventListener("input", () => {
@@ -809,11 +890,24 @@
       }
     });
 
+    // Выбор разрешения
+    document.querySelectorAll('.resolution-option').forEach(option => {
+      option.addEventListener('click', () => {
+        document.querySelectorAll('.resolution-option').forEach(o => o.classList.remove('selected'));
+        option.classList.add('selected');
+        const radio = option.querySelector('input[type="radio"]');
+        radio.checked = true;
+        selectedResolution = radio.value;
+      });
+    });
+
     // Загрузка файла
     fileSelector.addEventListener("click", () => fileInput.click());
 
     fileInput.addEventListener("change", (e) => {
-      handleFileSelect(e.target.files[0]);
+      if (e.target.files && e.target.files.length > 0) {
+        handleFileSelect(e.target.files[0]);
+      }
     });
 
     // Drag & Drop
@@ -830,7 +924,7 @@
       e.preventDefault();
       fileSelector.classList.remove("dragover");
       const files = e.dataTransfer.files;
-      if (files.length > 0) {
+      if (files && files.length > 0) {
         handleFileSelect(files[0]);
       }
     });
@@ -843,7 +937,7 @@
         return;
       }
 
-      const maxSize = 500 * 1024 * 1024; // 500 MB
+      const maxSize = 500 * 1024 * 1024;
       if (file.size > maxSize) {
         showStatus("Файл слишком большой (макс 500 MB)", "error");
         return;
@@ -869,69 +963,59 @@
     // Извлечение первого кадра из видео
     function extractFirstFrame() {
       const video = document.createElement("video");
-      const reader = new FileReader();
+      const url = URL.createObjectURL(currentFile);
 
-      reader.onload = (e) => {
-        video.src = e.target.result;
+      video.src = url;
+      video.currentTime = 0;
+
+      video.onloadedmetadata = () => {
         video.currentTime = 0;
-
-        video.onloadedmetadata = () => {
-          video.currentTime = 0;
-        };
-
-        video.onseeked = () => {
-          const canvas = document.createElement("canvas");
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(video, 0, 0);
-          previewFrame = canvas;
-          updatePreview();
-        };
       };
 
-      reader.readAsArrayBuffer(currentFile);
+      video.onseeked = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0);
+        previewFrame = canvas;
+        URL.revokeObjectURL(url);
+        updatePreview();
+      };
+
+      video.onerror = () => {
+        showStatus("Ошибка загрузки видео", "error");
+        URL.revokeObjectURL(url);
+      };
     }
 
     // Обновление предпросмотра ASCII
     function updatePreview() {
       if (!previewFrame) {
-        asciiPreview.innerHTML =
-          '<div style="text-align: center; padding: 20px; color: #888;">Загрузи видео чтобы увидеть предпросмотр</div>';
+        asciiPreview.innerHTML = '<div style="text-align: center; padding: 20px; color: #888;">Загрузи видео чтобы увидеть предпросмотр</div>';
         return;
       }
 
       try {
         const canvas = previewFrame;
         const ctx = canvas.getContext("2d");
-        const imageData = ctx.getImageData(
-          0,
-          0,
-          canvas.width,
-          canvas.height
-        );
-        const data = imageData.data;
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
         const width = parseInt(widthInput.value);
-        const height = Math.ceil((width * canvas.height) / canvas.width * 0.55);
+        const DEFAULT_CHAR_ASPECT_RATIO = 0.5;
+        const height = Math.round(width * DEFAULT_CHAR_ASPECT_RATIO);
 
-        // Реалистичный ASCII сет в зависимости от стиля
         const styles = {
-          normal:
-            " .:-=+*#%@",
-          inverted:
-            "@%#*+=-:. ",
-          dots:
-            "·•◦○◉",
-          gradient:
-            " ░▒▓█",
-          blocks:
-            " ▖▗▘▙▚▝▞▟"
+          normal: " .:-=+*#%@",
+          inverted: "@%#*+=-:. ",
+          dots: " •●◉◈◊",
+          gradient: " ░▒▓█",
+          blocks: " ▁▂▃▄▅▆▇█",
+          thin: " ·┆┇━"
         };
 
         const asciiSet = styles[styleInput.value] || styles.normal;
 
-        // Создание уменьшенного изображения
         const resizeCanvas = document.createElement("canvas");
         resizeCanvas.width = width;
         resizeCanvas.height = height;
@@ -940,7 +1024,6 @@
 
         const resizedData = resizeCtx.getImageData(0, 0, width, height).data;
 
-        // Применение фильтров
         const brightness = parseFloat(brightnessInput.value);
         const contrast = parseFloat(contrastInput.value);
         const gamma = parseFloat(gammaInput.value);
@@ -951,20 +1034,12 @@
           const g = resizedData[i + 1];
           const b = resizedData[i + 2];
 
-          // Конвертация в grayscale
           let gray = 0.299 * r + 0.587 * g + 0.114 * b;
-
-          // Применение яркости
           gray *= brightness;
 
-          // Применение контраста
           const mean = 128;
           gray = (gray - mean) * contrast + mean;
-
-          // Применение гаммы
           gray = Math.pow(gray / 255, 1 / gamma) * 255;
-
-          // Нормализация
           gray = Math.max(0, Math.min(255, gray));
 
           const normalized = gray / 255;
@@ -976,16 +1051,40 @@
           }
         }
 
-        // Применение стиля к предпросмотру
-        asciiPreview.textContent = ascii;
-        asciiPreview.style.color = textColorInput.value;
+        // Отрисуй на canvas
+        const displayCanvas = document.createElement("canvas");
+        const fontSize = 10;
+        const charWidth = 6;
+        const lineHeight = 12;
+        
+        displayCanvas.width = width * charWidth;
+        displayCanvas.height = height * lineHeight;
+        
+        const displayCtx = displayCanvas.getContext("2d");
+        displayCtx.fillStyle = bgColorInput.value;
+        displayCtx.fillRect(0, 0, displayCanvas.width, displayCanvas.height);
+        
+        displayCtx.fillStyle = textColorInput.value;
+        displayCtx.font = `${fontSize}px "IBM Plex Mono", monospace`;
+        displayCtx.textBaseline = "top";
+        
+        const lines = ascii.split("\n");
+        lines.forEach((line, y) => {
+          for (let x = 0; x < line.length; x++) {
+            displayCtx.fillText(line[x], x * charWidth, y * lineHeight);
+          }
+        });
+        
+        // Вставь canvas
+        asciiPreview.innerHTML = "";
+        asciiPreview.appendChild(displayCanvas);
         asciiPreview.style.backgroundColor = bgColorInput.value;
+        
       } catch (e) {
         console.error("Ошибка предпросмотра:", e);
       }
     }
 
-    // Показ статуса
     function showStatus(message, type = "info") {
       statusMessage.textContent = message;
       statusMessage.className = `status-message show ${type}`;
@@ -994,7 +1093,6 @@
       }, 5000);
     }
 
-    // Конвертирование видео
     convertBtn.addEventListener("click", async () => {
       if (!currentFile) {
         showStatus("Выбери видео файл", "error");
@@ -1014,10 +1112,10 @@
       formData.append("text_color", textColorInput.value);
       formData.append("fps", fpsInput.value);
       formData.append("crf", crfInput.value);
+      formData.append("resolution", selectedResolution);
 
       convertBtn.disabled = true;
-      convertBtn.innerHTML =
-        '<span class="loading-spinner"></span> Обработка...';
+      convertBtn.innerHTML = '<span class="loading-spinner"></span> Обработка...';
       progressBar.classList.add("show");
       progressFill.style.width = "0%";
 
@@ -1030,11 +1128,14 @@
         });
 
         if (!response.ok) {
-          const errorData = await response.json();
-          showStatus(
-            `Ошибка: ${errorData.detail || "Неизвестная ошибка"}`,
-            "error"
-          );
+          let errorMessage = "Неизвестная ошибка";
+          try {
+            const errorData = await response.json();
+            errorMessage = errorData.detail || errorData.message || errorMessage;
+          } catch (e) {
+            errorMessage = `HTTP ${response.status}`;
+          }
+          showStatus(`Ошибка: ${errorMessage}`, "error");
           progressBar.classList.remove("show");
           convertBtn.disabled = false;
           convertBtn.innerHTML = "<span class='emoji'>🚀</span>Конвертировать";
@@ -1044,10 +1145,7 @@
         const data = await response.json();
         currentJobId = data.job_id;
 
-        showStatus(
-          `Конвертация завершена! Job ID: ${data.job_id}`,
-          "success"
-        );
+        showStatus(`Конвертация завершена! Job ID: ${data.job_id}`, "success");
         progressFill.style.width = "100%";
 
         displayResults(data);
@@ -1063,46 +1161,37 @@
       }
     });
 
-    // Отображение результатов
     function displayResults(data) {
+      console.log("Полные данные ответа:", data);
+      console.log("data.result:", data.result);
+      
       resultsContainer.style.display = "block";
       resultsContainer.scrollIntoView({ behavior: "smooth", block: "nearest" });
 
       const stats = [
-        {
-          label: "Кадров",
-          value: data.result.frames_count || "—",
-        },
-        {
-          label: "FPS",
-          value: data.result.fps || "—",
-        },
-        {
-          label: "PNG",
-          value: data.result.png_files_count || 0,
-        },
-        {
-          label: "Время",
-          value: `${data.processing_time_seconds.toFixed(2)}s`,
-        },
+        { label: "Кадров", value: data.result.frames_count || "—" },
+        { label: "FPS", value: data.result.fps || "—" },
+        { label: "PNG", value: data.result.png_files_count || 0 },
+        { label: "Время", value: `${data.processing_time_seconds.toFixed(2)}s` },
       ];
 
       const statsHtml = stats
-        .map(
-          (s) => `
+        .map((s) => `
         <div class="stat">
           <div class="stat-value">${s.value}</div>
           <div class="stat-label">${s.label}</div>
         </div>
-      `
-        )
+      `)
         .join("");
 
       document.getElementById("statsContainer").innerHTML = statsHtml;
 
       let resultHtml = "";
 
-      if (data.result.mp4_url) {
+      // Проверяем mp4_file
+      const hasMP4 = data.result && (data.result.mp4_file || data.result.mp4_url);
+      
+      if (hasMP4) {
         resultHtml += `
           <div class="result-card">
             <h3><span class="emoji">🎥</span>Видео MP4</h3>
@@ -1116,7 +1205,7 @@
                 <span class="info-value">Вычисляется...</span>
               </div>
             </div>
-            <a href="${API_URL}/download/${data.job_id}/video" class="download-button">
+            <a href="${API_URL}/download/${data.job_id}/video" class="download-button" download>
               <span class="emoji">⬇️</span>Скачать MP4
             </a>
           </div>
@@ -1150,14 +1239,12 @@
       document.getElementById("resultSection").innerHTML = resultHtml;
     }
 
-    // Очистка
     clearBtn.addEventListener("click", () => {
       currentFile = null;
       previewFrame = null;
       fileInput.value = "";
       fileInfo.classList.remove("show");
-      asciiPreview.innerHTML =
-        '<div style="text-align: center; padding: 20px; color: #888;">Загрузи видео чтобы увидеть предпросмотр</div>';
+      asciiPreview.innerHTML = '<div style="text-align: center; padding: 20px; color: #888;">Загрузи видео чтобы увидеть предпросмотр</div>';
       resultsContainer.style.display = "none";
       statusMessage.classList.remove("show");
       progressBar.classList.remove("show");
