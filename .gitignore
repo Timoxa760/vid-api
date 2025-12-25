@@ -1,1 +1,8 @@
-".env" 
+venv/
+venv3*/
+venv312/
+__pycache__/
+*.pyc
+results/
+uploads/
+logs/

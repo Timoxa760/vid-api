@@ -104,32 +104,24 @@ class ASCIIConverter:
     def frame_to_ascii(self, frame: np.ndarray) -> str:
         """
         Преобразовать кадр видео в ASCII текст
-        
-        Args:
-            frame: OpenCV кадр (BGR)
-            
-        Returns:
-            ASCII текст кадра
         """
-        # Применить коррекции
         gray = self.apply_color_corrections(frame)
-        
-        # Изменить размер изображения
+
         resized = cv2.resize(gray, (self.config.width, self.height))
-        
-        # Нормализировать значения в диапазон 0-1
+
         normalized = resized.astype(np.float32) / 255.0
-        
-        # Преобразовать в ASCII
-        ascii_text = ""
+
+        lines = []
         for row in normalized:
+            line_chars = []
             for pixel in row:
-                # Найти индекс в ASCII наборе
                 idx = int(pixel * (len(self.ascii_set) - 1))
-                ascii_text += self.ascii_set[idx]
-            ascii_text += "\n"
-        
+                line_chars.append(self.ascii_set[idx])
+            lines.append("".join(line_chars))
+
+        ascii_text = "\n".join(lines)
         return ascii_text
+
     
     def save_frame_txt(self, ascii_text: str, frame_number: int) -> Path:
         """Сохранить ASCII кадр в текстовый файл"""
@@ -268,47 +260,47 @@ class ASCIIConverter:
         return result
     
     def build_mp4_from_frames(self, png_files: List[Path], fps: float) -> Path:
-        """
-        Собрать MP4 видео из PNG кадров с помощью FFmpeg
-        
-        Args:
-            png_files: Список путей к PNG файлам
-            fps: Частота кадров
-            
-        Returns:
-            Путь к созданному MP4 файлу
-        """
         output_path = self.output_dir / get_video_filename(VIDEO_MP4_EXT)
-        
-        # Создать временный файл со списком кадров для FFmpeg
         concat_file = self.output_dir / "framelist.txt"
-        with open(concat_file, 'w') as f:
+
+        with open(concat_file, "w", encoding="utf-8") as f:
             for png_file in png_files:
-                f.write(f"file '{png_file}'\n")
-        
+                rel = png_file.relative_to(self.output_dir)
+                f.write(f"file '{rel.as_posix()}'\n")
+
+        effective_fps = int(fps) if fps and fps > 0 else self.config.fps
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-r", str(effective_fps),
+            "-i", concat_file.name,
+            "-c:v", "libx264",
+            "-crf", str(self.config.crf),
+            "-pix_fmt", "yuv420p",
+            output_path.name,
+        ]
+
         try:
-            # Использовать FFmpeg для сборки видео
-            cmd = [
-                "ffmpeg",
-                "-f", "concat",
-                "-safe", "0",
-                "-i", str(concat_file),
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-crf", str(self.config.crf),
-                "-y",  # Перезаписать без вопроса
-                str(output_path)
-            ]
-            
-            logger.info(f"Запуск FFmpeg команды: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            
-            if result.returncode != 0:
-                raise RuntimeError(f"FFmpeg ошибка: {result.stderr}")
-            
-            return output_path
-        
+            result = subprocess.run(
+                cmd,
+                cwd=str(self.output_dir),
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            logger.debug("FFmpeg stdout:\n%s", result.stdout)
+            if result.stderr:
+                logger.debug("FFmpeg stderr:\n%s", result.stderr)
+        except subprocess.CalledProcessError as e:
+            logger.error("FFmpeg ошибка: %s", e.stderr)
+            raise RuntimeError(f"FFmpeg ошибка: {e.stderr}") from e
         finally:
-            # Удалить временный файл
+            # Удалить временный файл со списком кадров
             if concat_file.exists():
                 concat_file.unlink()
+
+        return output_path
