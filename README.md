@@ -39,7 +39,7 @@ git clone https://github.com/Timoxa760/vid-api.git
 cd vid-api
 
 # Создать виртуальное окружение
-python -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate  # на Windows: venv\Scripts\activate
 
 # Установить зависимости
